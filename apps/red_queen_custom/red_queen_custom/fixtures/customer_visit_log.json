@@ -1,0 +1,12 @@
+[
+ {
+  "customer": "test",
+  "docstatus": 0,
+  "doctype": "Customer Visit Log",
+  "modified": "2026-03-18 16:13:44.497292",
+  "name": "ac2b581703",
+  "purpose": "Sales",
+  "visit_date": "2026-03-18",
+  "visit_notes": "test"
+ }
+]
