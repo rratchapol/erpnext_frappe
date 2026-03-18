@@ -1,0 +1,80 @@
+services:
+  db:
+    image: mariadb:10.6
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --skip-character-set-client-handshake
+    environment:
+      - MARIADB_ROOT_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - db-data:/var/lib/mysql
+
+  # แยก Redis เป็น 3 ตัวตามมาตรฐาน Frappe
+  redis-cache:
+    image: redis:6.2-alpine
+  redis-queue:
+    image: redis:6.2-alpine
+  redis-socketio:
+    image: redis:6.2-alpine
+
+  frappe:
+    image: frappe/erpnext:${ERPNEXT_VERSION}
+    depends_on:
+      - db
+      - redis-cache
+      - redis-queue
+      - redis-socketio
+    environment:
+      # ส่งค่าการเชื่อมต่อให้ App รู้จัก Redis ทุกตัว
+      - DB_HOST=db
+      - REDIS_CACHE=redis-cache:6379
+      - REDIS_QUEUE=redis-queue:6379
+      - REDIS_SOCKETIO=redis-socketio:6379
+    volumes:
+      - sites-data:/home/frappe/frappe-bench/sites
+      # - ./sites:/home/frappe/frappe-bench/sites # ใช้ sites ในเครื่องแทนถ้าต้องการแก้ไขไฟล์โดยตรง
+      - ./apps/red_queen_custom:/home/frappe/frappe-bench/apps/red_queen_custom
+    ports:
+      - "8000:8000"
+    command: >
+      bash -c "
+        echo 'Step 1: Waiting for MariaDB...';
+        until timeout 1 bash -c 'cat < /dev/null > /dev/tcp/db/3306'; do sleep 2; done;
+        until mariadb-admin ping -hdb --password=${DB_PASSWORD} --silent; do sleep 5; done;
+
+        # --- ส่วนสำคัญ: บังคับเขียน Config ให้ชี้ไปที่ Docker Services ---
+        echo 'Step 2: Configuring common_site_config.json...';
+        echo '{
+          \"db_host\": \"db\",
+          \"redis_cache\": \"redis://redis-cache:6379\",
+          \"redis_queue\": \"redis://redis-queue:6379\",
+          \"redis_socketio\": \"redis://redis-socketio:6379\"
+        }' > sites/common_site_config.json;
+
+        if [ ! -f \"sites/apps.txt\" ]; then
+          echo 'Step 3: Initializing apps.txt...';
+          echo 'frappe' > sites/apps.txt && echo 'erpnext' >> sites/apps.txt;
+        fi;
+
+        if [ ! -d \"sites/${SITE_NAME}\" ]; then
+          echo 'Step 4: Creating new site...';
+          bench new-site ${SITE_NAME} --db-host db --mariadb-root-password ${DB_PASSWORD} --admin-password ${ADMIN_PASSWORD} --no-mariadb-socket;
+          echo 'Step 5: Installing ERPNext...';
+          bench --site ${SITE_NAME} install-app erpnext;
+          bench use ${SITE_NAME};
+        fi;
+
+        # --- ติดตั้ง App จาก Local Folder เพื่อป้องกัน ModuleNotFoundError ---
+        echo 'Step 5.5: Installing local apps...';
+        if [ -d \"apps/red_queen_custom\" ]; then
+          /home/frappe/frappe-bench/env/bin/python -m pip install -e apps/red_queen_custom;
+        fi;
+
+        echo 'Step 6: Starting Frappe Server...';
+        bench serve --port 8000
+      "
+
+volumes:
+  db-data:
+  sites-data:
